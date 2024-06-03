@@ -1,17 +1,12 @@
 ﻿using System.Threading.Channels;
-using System.Transactions;
-using Dapper;
+using Core.Interfaces;
 using Grains.States;
-using Infrastructure.Options;
-using Microsoft.Extensions.Options;
-using Npgsql;
 using Server.Extensions;
-using Server.Options;
 
 namespace Server.BackgroundServices;
 
 internal sealed class GrainStateUpdaterBackgroundService(
-        IOptions<DatabaseOptions> databaseOptions,
+        IServiceScopeFactory serviceScopeFactory,
         ILogger<GrainStateUpdaterBackgroundService> logger,
         ChannelReader<SessionState> sessionGrainStateReader)
     : BackgroundService
@@ -24,28 +19,9 @@ internal sealed class GrainStateUpdaterBackgroundService(
         {
             try
             {
-                await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
-                await connection.OpenAsync(stoppingToken);
-
-                if (Transaction.Current is not null &&
-                    Transaction.Current.TransactionInformation.Status is TransactionStatus.Aborted)
-                {
-                    throw new TransactionAbortedException("Transaction was aborted (probably by user cancellation request)");
-                }
-
-                const string sql = 
-                    """
-                    insert into sessions (id)
-                    values (@SessionId)
-                        on conflict do nothing 
-                    """;
-                
-                await connection.ExecuteAsync(
-                    sql,
-                    sessionStateBatch.Select(s => new
-                    {
-                        SessionId = s.Id
-                    }));
+                await using var scope = serviceScopeFactory.CreateAsyncScope();
+                var sessionDataRepository = scope.ServiceProvider.GetRequiredService<ISessionDataRepository>();
+                await sessionDataRepository.CreateSessions(sessionStateBatch.Select(x => x.Id), stoppingToken);
             }
             catch (Exception e)
             {

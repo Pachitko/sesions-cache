@@ -261,7 +261,7 @@ public sealed class SessionGrain(
             }
             
             _replicationTimer = RegisterTimer(
-                asyncCallback: x => Replicate("retry"),
+                asyncCallback: _ => Replicate("retry"),
                 state: null!,
                 dueTime: _options.ReplicationRetryDelay,
                 period: _options.ReplicationRetryDelay);

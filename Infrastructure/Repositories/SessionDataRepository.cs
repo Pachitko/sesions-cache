@@ -13,6 +13,27 @@ internal sealed class SessionDataRepository(
         IOptions<DatabaseOptions> databaseOptions) 
     : ISessionDataRepository
 {
+    public async Task CreateSessions(IEnumerable<Guid> sessionIds, CancellationToken token)
+    {
+        await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
+        await connection.OpenAsync(token);
+
+        if (Transaction.Current is not null &&
+            Transaction.Current.TransactionInformation.Status is TransactionStatus.Aborted)
+        {
+            throw new TransactionAbortedException("Transaction was aborted (probably by user cancellation request)");
+        }
+
+        const string sql = 
+            """
+            insert into sessions (id)
+            values (@SessionId)
+                on conflict do nothing
+            """;
+                
+        await connection.ExecuteAsync(sql, sessionIds);
+    }
+
     public async Task<bool> Exists(Guid sessionId, CancellationToken cancellationToken)
     {
         await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
