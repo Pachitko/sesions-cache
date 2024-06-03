@@ -1,8 +1,8 @@
 using Core.Interfaces;
+using Infrastructure.Options;
 using Infrastructure.Repositories;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Server.Options;
 
 namespace Infrastructure;
 

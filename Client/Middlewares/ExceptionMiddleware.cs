@@ -22,8 +22,8 @@ internal sealed class ExceptionMiddleware(RequestDelegate next, ILogger<Exceptio
     {
         context.Response.StatusCode = exception switch
         {
-            SessionNotFoundException => StatusCodes.Status404NotFound,
-            SessionExpiredException => StatusCodes.Status409Conflict,
+            SessionExpiredException => StatusCodes.Status404NotFound,
+            ConcurrencyException => StatusCodes.Status409Conflict,
             SiloUnavailableException => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status500InternalServerError
         };

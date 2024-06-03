@@ -1,8 +1,8 @@
 ﻿using System.Threading.Channels;
 using System.Transactions;
-using Core;
 using Dapper;
 using Grains.States;
+using Infrastructure.Options;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Server.Extensions;
@@ -19,12 +19,12 @@ internal sealed class GrainStateUpdaterBackgroundService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await foreach (var sessionStateBatch in sessionGrainStateReader
-                           .ReadAllBatches(batchSize: 1000, timeout: TimeSpan.FromMilliseconds(500))
+                           .ReadAllBatches(batchSize: 1000, timeout: TimeSpan.FromMilliseconds(1000))
                            .WithCancellation(stoppingToken))
         {
             try
             {
-                await using var connection = new NpgsqlConnection(databaseOptions.Value.SessionDbConnectionString);
+                await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
                 await connection.OpenAsync(stoppingToken);
 
                 if (Transaction.Current is not null &&
@@ -42,7 +42,7 @@ internal sealed class GrainStateUpdaterBackgroundService(
                 
                 await connection.ExecuteAsync(
                     sql,
-                    sessionStateBatch.Select(s => new SessionData
+                    sessionStateBatch.Select(s => new
                     {
                         SessionId = s.Id
                     }));

@@ -1,6 +1,7 @@
-using System.Security.AccessControl;
+using System.Threading.Tasks.Dataflow;
 using Client.Contracts.Requests;
 using Client.Middlewares;
+using Client.Options;
 using Core;
 using Grains.Exception;
 using Grains.Interfaces;
@@ -8,39 +9,32 @@ using Grains.Messages;
 using Microsoft.AspNetCore.Mvc;using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
-using Orleans.Messaging;
 using Orleans.Runtime;
 using Orleans.Runtime.Messaging;
-using SessionOptions = Client.Options.SessionOptions;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
 builder.Services.AddMemoryCache();
 
-builder.Services.Configure<SessionOptions>(builder.Configuration.GetSection(nameof(SessionOptions)));
+builder.Services
+    .AddOptions<ClientOptions>()
+    .Bind(builder.Configuration.GetSection(nameof(ClientOptions)))
+    .ValidateDataAnnotations();
+
+var clientOptions = builder.Configuration.GetSection(nameof(ClientOptions)).Get<ClientOptions>()!;
 
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
     serverOptions.AddServerHeader = false;
 });
 
-builder.Host.UseOrleansClient(static clientBuilder =>
+builder.Host.UseOrleansClient(clientBuilder =>
 {
-    clientBuilder.AddMemoryStreams(Constants.StreamProvider);
-    
-#if DEBUG
     clientBuilder.UseAdoNetClustering(options =>
     {
         options.Invariant = "Npgsql";
-        options.ConnectionString = "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
+        options.ConnectionString = clientOptions.ConnectionString;
     });
-#else
-    clientBuilder.UseAdoNetClustering(options =>
-    {
-        options.Invariant = "Npgsql";
-        options.ConnectionString = "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
-    });
-#endif
 
     clientBuilder.Configure<GatewayOptions>(options =>
     {
@@ -50,7 +44,7 @@ builder.Host.UseOrleansClient(static clientBuilder =>
     clientBuilder.Configure<ClusterOptions>(options =>
     {
         options.ClusterId = Constants.ClusterId;
-        options.ServiceId = "sessions-client";
+        options.ServiceId = Constants.ClientServiceId;
     });
 });
 
@@ -60,153 +54,112 @@ app.UseMiddleware<ExceptionMiddleware>();
 
 var sessionsGroup = app.MapGroup("/sessions/");
 
-var grainIds = new List<Guid>();
+#region stress
+var sessionIds = new List<Guid>();
 
-sessionsGroup.MapGet("/stateless-grain", async ([FromServices] IClusterClient client) =>
-{
-    var streamGuid = Guid.NewGuid();
-
-    var streamProvider = client.GetStreamProvider(Constants.StreamProvider);
-
-    var streamId = StreamId.Create(Constants.SessionStreamNamespace, streamGuid);
-    var stream = streamProvider.GetStream<int>(streamId);
-
-    await stream.OnNextAsync(123);
-    
-    // var replicatedGrain = client.GetGrain<IStatelessGrain>();
-
-    return Results.Json(new
-    {
-        Value = 0//await replicatedGrain.Get("qwe")
-    });
-});
-
-sessionsGroup.MapGet("/replicated-grain", async ([FromServices] IClusterClient client) =>
-{
-    var replicatedGrain = client.GetGrain<IReplicatedGrain>(Guid.NewGuid());
-
-    await replicatedGrain.Add();
-    
-    return Results.Json(new
-    {
-        Value = await replicatedGrain.Get()
-    });
-});
-
-sessionsGroup.MapPost("stress/{count}", async (int count, [FromServices] IClusterClient client) =>
-{
-    RequestContext.Set(Constants.SessionGrainOrder, 1);
-
-    var tasks = new List<Task>();
-    for (var i = 0; i < count; i++)
-    {
-        var grainId = Guid.NewGuid();
-        grainIds.Add(grainId);
-        var sessionGrain = client.GetGrain<ISessionGrain>(grainId, "0");
-        var task = sessionGrain.Update(new UpdateSessionCommand
-        {
-            Sections = new []
-            {
-                new SectionData
-                {
-                    Key = "some key",
-                    Value = new byte[10000],
-                    Version = 0
-                }
-            },
-            ExpirationUnixSeconds = DateTimeOffset.UtcNow.Add(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds()
-        });
-        
-        tasks.Add(task);
-    }
-
-    await Task.WhenAll(tasks);
-    return Results.Ok();
-});
-
-
-sessionsGroup.MapPatch("stress/{count}", async (
+sessionsGroup.MapPatch("stress/{count}/{size}", async (
     [FromRoute] int count,
+    [FromRoute] int size,
+    [FromServices] IMemoryCache memoryCache,
+    [FromServices] ILogger<Program> logger,
     [FromServices] IClusterClient client) =>
 {
-    RequestContext.Set("client", null);
-    RequestContext.Set("next-grain-order", 1);
-    
-    var tasks = new List<Task>();
-    for (var i = 0; i < count; i++)
-    {
-        var grainId = grainIds[i];
-        var sessionGrain = client.GetGrain<ISessionGrain>(grainId, "0");
-        var task = sessionGrain.Update(new UpdateSessionCommand
-        {
-            Sections = new []
+    var updater = new TransformBlock<Guid, bool>(
+        sessionId =>
+            RetryWithOrder(client, memoryCache, logger, sessionId, async sessionGrain =>
             {
-                new SectionData
+                await sessionGrain.Update(new UpdateSessionCommand
                 {
-                    Key = "some key",
-                    Value = new byte[10000],
-                    Version = 0
-                }
-            },
-            ExpirationUnixSeconds = DateTimeOffset.UtcNow.Add(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds()
-        });
-        
-        tasks.Add(task);
+                    Sections = new[]
+                    {
+                        new CreateSectionData
+                        {
+                            Key = "some key",
+                            Value = new byte[size],
+                            Version = 1
+                        }
+                    },
+                    ExpirationUnixSeconds = DateTimeOffset.UtcNow.Add(TimeSpan.FromMinutes(1)).ToUnixTimeSeconds()
+                });
+
+                return true;
+            }),
+        new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 1000 }
+    );
+
+    var buffer = new BufferBlock<bool>();
+    updater.LinkTo(buffer);
+
+    foreach (var sessionId in Enumerable.Range(0, count).Select(_ => Guid.NewGuid()))
+    {
+        sessionIds.Add(sessionId);
+        updater.Post(sessionId);
+        //or await downloader.SendAsync(url);
     }
 
-    await Task.WhenAll(tasks);
+    updater.Complete();
+    await updater.Completion;
+    
     return Results.Ok();
 });
 
 sessionsGroup.MapGet("stress/{count}", async ( 
     [FromRoute] int count,
+    [FromServices] IMemoryCache memoryCache,
+    [FromServices] ILogger<Program> logger,
     [FromServices] IClusterClient client) =>
 {
-    RequestContext.Set("client", null);
-    var tasks = new List<Task>();
-    for (var i = 0; i < count; i++)
+    var updater = new TransformBlock<Guid, SessionData?>(
+        sessionId =>
+            RetryWithOrder(client, memoryCache, logger, sessionId, async sessionGrain =>
+            {
+                var result = await sessionGrain.Get(new GetSessionDataQuery
+                {
+                    Sections = new []
+                    {
+                        "some key"
+                    }
+                });
+                return result;
+            }),
+        new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 1000 }
+    );
+
+    var buffer = new BufferBlock<SessionData?>();
+    updater.LinkTo(buffer);
+
+    foreach (var sessionId in sessionIds.Take(count))
     {
-        var sessionGrain = client.GetGrain<ISessionGrain>(grainIds[i], "1");
-        var task = sessionGrain.Get();
-        tasks.Add(task);
+        sessionIds.Add(sessionId);
+        updater.Post(sessionId);
+        //or await downloader.SendAsync(url);
     }
 
-    await Task.WhenAll(tasks);
+    updater.Complete();
+    await updater.Completion;
+    
     return Results.Ok();
 });
+#endregion
 
-sessionsGroup.MapGet("{sessionId}", async (
-    [FromRoute] Guid sessionId,
+sessionsGroup.MapPost("get", async (
+    [FromBody] GetSessionRequest request,
     [FromServices] IClusterClient client,
     [FromServices] IMemoryCache memoryCache,
     [FromServices] ILogger<Program> logger) =>
-{    
-    var order = memoryCache.TryGetValue(sessionId, out int orderValue) ? orderValue : 1;
-    for (; order <= 2; order++)
+{
+    var sessionData = await RetryWithOrder(client, memoryCache, logger, request.SessionId, async sessionGrain =>
     {
-        try
+        var result = await sessionGrain.Get(new GetSessionDataQuery
         {
-            RequestContext.Set(Constants.SessionGrainOrder, order);
+            Sections = request.Sections
+        });
+        return result;
+    });
 
-            var sessionGrain = client.GetGrain<ISessionGrain>(sessionId, order.ToString());
-            var sessionData = await sessionGrain.Get();
-
-            // if (order == 0)
-            // {
-            //     await client.GetGrain<ISessionGrain>(sessionId, (order + 1).ToString()).Get();
-            // }
-            
-            memoryCache.Set(sessionId, order, TimeSpan.FromSeconds(30));
-
-            return Results.Json(sessionData);
-        }
-        catch (Exception e)
-        {
-            logger.LogError(e, "{Message}", e.Message);
-        }
-    }
-
-    return Results.Ok();
+    return sessionData is null
+        ? Results.NotFound()
+        : Results.Json(sessionData);
 });
 
 sessionsGroup.MapPatch("/", async (
@@ -214,29 +167,19 @@ sessionsGroup.MapPatch("/", async (
     [FromServices] IMemoryCache memoryCache,
     [FromServices] ILogger<Program> logger,
     [FromServices] IClusterClient client,
-    [FromServices] IGatewayListProvider gatewayListProvider,
-    IOptions<SessionOptions> options) =>
+    IOptions<ClientOptions> options) =>
 {
-    // var silos = await gatewayListProvider.GetGateways();
-    // var randomSiloUri = silos[Random.Shared.Next(silos.Count)];
-    // var siloAddress = SiloAddress.New(randomSiloUri.ToIPEndPoint()!, 0);
-    // RequestContext.Set(IPlacementDirector.PlacementHintKey, siloAddress);
-
     if (request.Sections.Any(s => s.Value.Length > options.Value.MaxSectionSize))
     {
         throw new SessionSizeExceededException(request.SessionId.ToString());
     }
 
-    await RetryWithOrder(memoryCache, logger, request.SessionId, async order =>
+    await RetryWithOrder(client, memoryCache, logger, request.SessionId, async sessionGrain =>
     {
-        RequestContext.Set(Constants.SessionGrainOrder, order);
-
-        var sessionGrain = client.GetGrain<ISessionGrain>(request.SessionId, order.ToString());
-
         await sessionGrain.Update(new UpdateSessionCommand
         {
             Sections = request.Sections
-                .Select(x => new SectionData
+                .Select(x => new CreateSectionData
                 {
                     Key = x.Key,
                     Value = x.Value,
@@ -244,9 +187,11 @@ sessionsGroup.MapPatch("/", async (
                 })
                 .ToArray(),
             ExpirationUnixSeconds = request.TimeToLive.HasValue
-                ? DateTimeOffset.UtcNow.Add(request.TimeToLive.Value).ToUnixTimeSeconds()
+                ? DateTimeOffset.UtcNow.AddSeconds(request.TimeToLive.Value).ToUnixTimeSeconds()
                 : null
         });
+
+        return true;
     });
 
     return Results.Ok();
@@ -258,14 +203,10 @@ sessionsGroup.MapDelete("{sessionId}", async (
     [FromServices] ILogger<Program> logger,
     [FromServices] IClusterClient client) =>
 {
-    var ok = await RetryWithOrder(memoryCache, logger, sessionId, async (order) =>
+    var ok = await RetryWithOrder(client, memoryCache, logger, sessionId, async sessionGrain =>
     {
-        RequestContext.Set(Constants.SessionGrainOrder, order + 1);
-
-        var sessionGrain = client.GetGrain<ISessionGrain>(sessionId, order.ToString());
         await sessionGrain.Invalidate();
-
-        memoryCache.Set(sessionId, order, TimeSpan.FromSeconds(30));
+        return true;
     });
     
     return ok ? Results.Ok() : Results.BadRequest();
@@ -274,22 +215,38 @@ sessionsGroup.MapDelete("{sessionId}", async (
 await app.RunAsync();
 return;
 
-static async Task<bool> RetryWithOrder(IMemoryCache memoryCache, ILogger<Program> logger, Guid sessionId, Func<int, Task> func)
+async Task<TResult?> RetryWithOrder<TResult>(
+    IGrainFactory clusterClient,
+    IMemoryCache memoryCache,
+    ILogger logger,
+    Guid sessionId,
+    Func<ISessionGrain, Task<TResult>> func)
 {
     var order = memoryCache.TryGetValue(sessionId, out int orderValue) ? orderValue : 1;
 
-    for (; order <= 2; order++)
+    for (; order <= clientOptions.ReplicationFactor; order++)
     {
         try
         {
-            await func(order);
-            return true;
+            var sessionGrain = clusterClient.GetGrain<ISessionGrain>(sessionId, order.ToString());
+            RequestContext.Set(Constants.SessionGrainOrder, order);
+            var result = await func(sessionGrain);
+            memoryCache.Set(sessionId, order, TimeSpan.FromSeconds(5));
+            return result;
         }
-        catch (Exception e) when (e is TimeoutException or SiloUnavailableException)
+        catch (Exception e) when (e is TimeoutException or SiloUnavailableException or ConnectionFailedException)
         {
-            logger.LogError(e, "{Message}", e.Message);
+            logger.LogError(e, "Retry: {Message}", e.Message);
+        }
+        catch (Exception e) when (e is SessionExpiredException)
+        {
+            return default;
+        }
+        catch (Exception e)
+        {
+            logger.LogError(e, "Unknown: {Message}", e.Message);
         }
     }
     
-    return false;
+    return default;
 }

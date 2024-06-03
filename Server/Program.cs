@@ -1,42 +1,45 @@
-using System.Threading.Channels;
 using Core;
+using Core.Models;
 using Grains.GrainExtensions;
 using Grains.States;
 using Infrastructure;
+using Infrastructure.Options;
 using Orleans.Configuration;
 using Orleans.Runtime;
 using Server.BackgroundServices;
+using Server.Extensions;
 using Server.Grains;
 using Server.Options;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+builder.Services
+    .AddOptions<ServerOptions>()
+    .Bind(builder.Configuration.GetSection(nameof(ServerOptions)))
+    .ValidateDataAnnotations();
+
+builder.Services
+    .AddOptions<DatabaseOptions>()
+    .Bind(builder.Configuration.GetSection(nameof(DatabaseOptions)))
+    .ValidateDataAnnotations();
+
 builder.Services.AddInfrastructure(builder.Configuration);
 
-var sessionGrainStateChannel = Channel.CreateUnbounded<SessionState>(new UnboundedChannelOptions
-{
-    AllowSynchronousContinuations = true,
-    SingleReader = true,
-    SingleWriter = false
-});
-
-builder.Services.AddSingleton<ChannelReader<SessionState>>(sessionGrainStateChannel);
-builder.Services.AddSingleton<ChannelWriter<SessionState>>(sessionGrainStateChannel);
+builder.Services.AddChannel<SessionDeletion>();
+builder.Services.AddChannel<SessionState>();
 
 builder.Services.AddHostedService<GrainStateUpdaterBackgroundService>();
-
-builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(nameof(DatabaseOptions)));
+builder.Services.AddHostedService<SessionDeleterBackgroundService>();
 
 builder.WebHost.UseKestrelCore();
-builder.WebHost.ConfigureKestrel(serverOptions =>
+builder.WebHost.ConfigureKestrel(serverConfig =>
 {
-    serverOptions.AddServerHeader = false;
-    serverOptions.ListenLocalhost(Random.Shared.Next(10000, 50000));
+    serverConfig.AddServerHeader = false;
+    serverConfig.ListenLocalhost(Random.Shared.Next(10000, 50000));
 });
 
 builder.Services.AddLogging(logging =>
 {
-    logging.SetMinimumLevel(LogLevel.None);
     logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
     logging.AddSimpleConsole();
 
@@ -55,72 +58,25 @@ builder.Services.AddPlacementDirector<SessionPlacementStrategy, SessionPlacement
 
 builder.Host.UseOrleans(static siloBuilder =>
 {
-    siloBuilder
-        .AddMemoryStreams(Constants.StreamProvider)
-        .AddMemoryGrainStorage("PubSubStore");
-    
-    // siloBuilder.AddStateStorageBasedLogConsistencyProvider();
-    // siloBuilder.AddLogStorageBasedLogConsistencyProvider();
+    var serverOptions = siloBuilder.Configuration.GetSection(nameof(ServerOptions)).Get<ServerOptions>()!;
+    var databaseOptions = siloBuilder.Configuration.GetSection(nameof(DatabaseOptions)).Get<DatabaseOptions>()!;
 
     siloBuilder.UseDashboard(x => { });
     
-#if DEBUG
     siloBuilder.UseAdoNetClustering(options =>
     {
         options.Invariant = "Npgsql";
-        options.ConnectionString = "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
+        options.ConnectionString = databaseOptions.ConnectionString;
     });
-#else
-    siloBuilder.UseAdoNetClustering(options =>
-    {
-        options.Invariant = "Npgsql";
-        options.ConnectionString = "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
-    });
-#endif
 
-    siloBuilder.ConfigureEndpoints(siloPort: Random.Shared.Next(10000, 50000), gatewayPort: Random.Shared.Next(10000, 50000));
+    siloBuilder.ConfigureEndpoints(serverOptions.SiloPort, serverOptions.GatewayPort);
 
     siloBuilder.Configure<ClusterOptions>(options =>
     {
-        options.ClusterId = "session-cluster";
-        options.ServiceId = "sessions-server";
+        options.ClusterId = Constants.ClusterId;
+        options.ServiceId = Constants.ServerServiceId;
     });
-    
-    siloBuilder.AddAdoNetGrainStorage("StreamProvider", options =>
-    {
-        options.Invariant = "Npgsql";
-        options.ConnectionString =
-            "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
-    });
-    
-    siloBuilder.AddAdoNetGrainStorage("PubSubStore", options =>
-    {
-        options.Invariant = "Npgsql";
-        options.ConnectionString =
-            "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
-    });
-    
-    siloBuilder.AddAdoNetGrainStorage("StateStorage", options =>
-    {
-        options.Invariant = "Npgsql";
-        options.ConnectionString =
-            "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
-    });
-     
-    siloBuilder.AddAdoNetGrainStorage("LogStorage", options =>
-    {
-        options.Invariant = "Npgsql";
-        options.ConnectionString =
-            "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
-    });
-    
-    siloBuilder.AddAdoNetGrainStorage("sessions", options =>
-    {
-        options.Invariant = "Npgsql";
-        options.ConnectionString =
-            "User ID=postgres;Password=12qwasZX;Host=localhost;Port=5433;Database=session_cluster";
-    });
-    
+
     siloBuilder.ConfigureServices(services =>
         services.AddSingleton<PlacementStrategy, HashBasedPlacement>());
     

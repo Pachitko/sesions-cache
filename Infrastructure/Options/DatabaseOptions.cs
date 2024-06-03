@@ -1,6 +1,6 @@
-﻿namespace Server.Options;
+﻿namespace Infrastructure.Options;
 
 public sealed class DatabaseOptions
 {
-    public required string SessionDbConnectionString { get; set; } = null!;
+    public required string ConnectionString { get; set; } = null!;
 }

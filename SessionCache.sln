@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Server", "Server\Server.csp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Infrastructure", "Infrastructure\Infrastructure.csproj", "{F39B15A5-9BD2-401B-AA20-1BF584ACDEE0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RaftServer", "RaftServer\RaftServer.csproj", "{2F06477E-F645-4B3B-8D8D-348BF1D74667}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,5 +38,9 @@ Global
 		{F39B15A5-9BD2-401B-AA20-1BF584ACDEE0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F39B15A5-9BD2-401B-AA20-1BF584ACDEE0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F39B15A5-9BD2-401B-AA20-1BF584ACDEE0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2F06477E-F645-4B3B-8D8D-348BF1D74667}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2F06477E-F645-4B3B-8D8D-348BF1D74667}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2F06477E-F645-4B3B-8D8D-348BF1D74667}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2F06477E-F645-4B3B-8D8D-348BF1D74667}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

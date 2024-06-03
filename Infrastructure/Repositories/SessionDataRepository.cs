@@ -1,9 +1,10 @@
 using System.Transactions;
 using Core.Interfaces;
+using Core.Models;
 using Dapper;
+using Infrastructure.Options;
 using Microsoft.Extensions.Options;
 using Npgsql;
-using Server.Options;
 using IsolationLevel = System.Data.IsolationLevel;
 
 namespace Infrastructure.Repositories;
@@ -14,7 +15,7 @@ internal sealed class SessionDataRepository(
 {
     public async Task<bool> Exists(Guid sessionId, CancellationToken cancellationToken)
     {
-        await using var connection = new NpgsqlConnection(databaseOptions.Value.SessionDbConnectionString);
+        await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         
@@ -34,9 +35,9 @@ internal sealed class SessionDataRepository(
         return exists;
     }
 
-    public async Task Delete(Guid sessionId, CancellationToken cancellationToken)
+    public async Task Delete(IEnumerable<SessionDeletion> sessionsToDelete, CancellationToken cancellationToken)
     {
-        await using var connection = new NpgsqlConnection(databaseOptions.Value.SessionDbConnectionString);
+        await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         
@@ -46,11 +47,13 @@ internal sealed class SessionDataRepository(
             throw new TransactionAbortedException("Transaction was aborted (probably by user cancellation request)");
         }
         
-        await connection.ExecuteAsync("delete from sessions where id=@id",
-            new 
+        await connection.ExecuteAsync(
+            "delete from sessions where id = any(@SessionIds)",
+            new
             {
-                id = sessionId
-            },
-            commandTimeout: 1000);
+                SessionIds = sessionsToDelete
+                    .Select(sessionId => sessionId.SessionId)
+                    .ToArray() 
+            });
     }
 }

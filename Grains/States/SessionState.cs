@@ -1,4 +1,6 @@
-﻿namespace Grains.States;
+﻿using Grains.Messages;
+
+namespace Grains.States;
 
 using SectionId = String;
 
@@ -7,52 +9,40 @@ using SectionId = String;
 [Alias("SessionData")]
 public sealed class SessionState
 {
-    private long _expirationUnixSeconds;
-
     [Id(0)]
     [Immutable]
     public required Guid Id { get; init; }
 
     [Id(1)]
-    public required long ExpirationUnixSeconds
-    {
-        get => _expirationUnixSeconds;
-        set
-        {
-            if (_expirationUnixSeconds == value)
-                return;
-            
-            _expirationUnixSeconds = value;
-            Version++;
-        }
-    }
+    public required long ExpirationUnixSeconds { get; set; }
 
     [Id(2)]
     public IDictionary<SectionId, SectionData> Data { get; init; } = new Dictionary<SectionId, SectionData>();
 
     [Id(3)]
-    public long Version { get; private set; } = 1;
+    public long Version { get; set; } = 1;
     
     public bool IsEmpty() => Id == Guid.Empty;
 
-    [GenerateSerializer]
-    public sealed class SectionData
+    public static SessionState Empty()
     {
-        [NonSerialized]
-        private byte[] _data = Array.Empty<byte>();
-
-        [Id(0)]
-        public byte[] Data
+        return new SessionState
         {
-            get => _data;
-            set
-            {
-                _data = value;
-                Version++;
-            }
-        }
+            Id = Guid.Empty,
+            ExpirationUnixSeconds = 0,
+            Data = null!,
+            Version = 1
+        };
+    }
 
-        [Id(1)]
-        public long Version { get; private set; }
+    public static SessionState FromSessionData(Guid sessionId, SessionData sessionData)
+    {
+        return new SessionState
+        {
+            Id = sessionId,
+            ExpirationUnixSeconds = sessionData.ExpirationUnixSeconds,
+            Data = sessionData.Data,
+            Version = sessionData.Version
+        };
     }
 }

@@ -25,9 +25,7 @@ public sealed class SessionPlacementDirector(
     private Task<SiloAddress>? _cachedLocalSilo;
 
     public Task<SiloAddress> OnAddActivation(
-        PlacementStrategy strategy,
-        PlacementTarget target,
-        IPlacementContext context)
+        PlacementStrategy strategy, PlacementTarget target, IPlacementContext context)
     { 
         logger.LogWarning("OnAddActivation {Key}", target.GrainIdentity.Key.ToString());
 
@@ -36,6 +34,7 @@ public sealed class SessionPlacementDirector(
             value.Equals(One) &&
             !localSessionCache.Exists(sessionId: target.GrainIdentity.GetGuidKey()))
         {
+            localSessionCache.Add(target.GrainIdentity.GetGuidKey(), TimeSpan.FromHours(1));
             return _cachedLocalSilo ??= Task.FromResult(context.LocalSilo);
         }
 
@@ -43,8 +42,15 @@ public sealed class SessionPlacementDirector(
 
         if (compatibleSilos.Length == 1 && compatibleSilos[0].Equals(context.LocalSilo))
         {
-            logger.LogCritical("Not enough silos for session replication");
-            return _cachedLocalSilo ??= Task.FromResult(context.LocalSilo);
+            if (!localSessionCache.Exists(sessionId: target.GrainIdentity.GetGuidKey()))
+            {
+                return _cachedLocalSilo ??= Task.FromResult(context.LocalSilo);
+            }
+            
+            throw new SiloUnavailableException("Not enough silos for session replication");
+            // RequestContext.Set(Constants.Migrate, true);
+            // logger.LogCritical("Not enough silos for session replication");
+            // return _cachedLocalSilo ??= Task.FromResult(context.LocalSilo);
         }
         
         // RandomPlacementDirector without local
