@@ -50,14 +50,14 @@ public sealed class SessionGrain(
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
-        logger.LogWarning("Deactivating: {Id} {SiloAddress}", 
+        logger.LogWarning("Deactivating: {Id} {SiloAddress}",
             this.GetPrimaryKeyString(), localSiloDetails.SiloAddress);
         
         localSessionCache.Remove(this.GetPrimaryKey());
 
         if (IsExpired())
         {
-            await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey()), cancellationToken);
+            await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), "expired"), cancellationToken);
         }
         else
         {
@@ -189,15 +189,14 @@ public sealed class SessionGrain(
         return SessionData.FromSessionState(_state, query.Sections);
     }
 
-    public async ValueTask<bool> Invalidate()
+    public async ValueTask<bool> Invalidate(string reason)
     {
         logger.LogWarning("Invalidate {Key}", this.GetPrimaryKeyString());
 
         DeactivateOnIdle();
         localSessionCache.Remove(this.GetPrimaryKey());
         
-        if (_state.IsEmpty() &&
-            !await sessionDataRepository.Exists(this.GetPrimaryKey(), CancellationToken.None))
+        if (_state.IsEmpty() && !await sessionDataRepository.Exists(this.GetPrimaryKey(), CancellationToken.None))
         {
             return true;
         }
@@ -208,10 +207,10 @@ public sealed class SessionGrain(
         {
             var replica = clusterClient.GetGrain<ISessionGrain>(this.GetPrimaryKey(), (_order + 1).ToString());
             RequestContext.Set(Constants.SessionGrainOrder, _order + 1);
-            return await replica.Invalidate();
+            return await replica.Invalidate(reason);
         }
-
-        await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey()));
+        
+        await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), reason));
 
         return true;
     }

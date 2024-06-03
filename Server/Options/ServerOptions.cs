@@ -16,4 +16,6 @@ public sealed class ServerOptions
     public required TimeSpan ReplicationRetryDelay { get; set; }
 
     public bool EnableConcurrencyCheckForSections { get; set; }
+
+    public string? InvalidationCallbackUrl { get; set; }
 }

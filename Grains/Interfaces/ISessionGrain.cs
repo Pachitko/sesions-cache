@@ -14,5 +14,5 @@ public interface ISessionGrain : IGrainWithGuidCompoundKey
     Task<SessionData?> Get(GetSessionDataQuery dataQuery);
     
     // [ResponseTimeout("00:00:10")]
-    ValueTask<bool> Invalidate();
+    ValueTask<bool> Invalidate(string reason);
 }

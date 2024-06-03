@@ -198,14 +198,15 @@ sessionsGroup.MapPatch("/", async (
 });
 
 sessionsGroup.MapDelete("{sessionId}", async (
-    Guid sessionId,
+    [FromRoute] Guid sessionId,
+    [FromQuery] string reason,
     [FromServices] IMemoryCache memoryCache,
     [FromServices] ILogger<Program> logger,
     [FromServices] IClusterClient client) =>
 {
     var ok = await RetryWithOrder(client, memoryCache, logger, sessionId, async sessionGrain =>
     {
-        await sessionGrain.Invalidate();
+        await sessionGrain.Invalidate(reason);
         return true;
     });
     

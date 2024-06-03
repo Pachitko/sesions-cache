@@ -23,6 +23,8 @@ builder.Services
     .Bind(builder.Configuration.GetSection(nameof(DatabaseOptions)))
     .ValidateDataAnnotations();
 
+builder.Services.AddHttpClient();
+
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddChannel<SessionDeletion>();
