@@ -24,7 +24,7 @@ public sealed class SessionGrain(
         IClusterClient clusterClient,
         ILocalSessionCache localSessionCache,
         ISiloStatusOracle siloStatusOracle,
-        IOptionsSnapshot<ServerOptions> options)
+        IOptions<ServerOptions> options)
         : Grain, ISessionGrain
 {
     private readonly ServerOptions _options = options.Value;
@@ -67,26 +67,18 @@ public sealed class SessionGrain(
         }
     }
 
-    public async Task Update(UpdateSessionCommand command)
+    public async Task<SiloAddress> Update(UpdateSessionCommand command)
     {
         logger.LogWarning("{SessionId} {@CommandSections}", 
             this.GetPrimaryKeyString(), command.Sections.Select(x => x.Key));
         
         var primaryKey = this.GetPrimaryKey();
         
-        if (command.IsEmpty())
-        {
-            return;
-        }
-        
         if (command.ExpirationUnixSeconds.HasValue) 
         {
             var expirationTimeSpan = 
                 DateTimeOffset.FromUnixTimeSeconds(command.ExpirationUnixSeconds.Value) - DateTimeOffset.UtcNow;
-            
-            localSessionCache.Add(this.GetPrimaryKey(), expirationTimeSpan);
 
-            logger.LogWarning(expirationTimeSpan.ToString());
             DelayDeactivation(expirationTimeSpan);
         }
         
@@ -142,7 +134,7 @@ public sealed class SessionGrain(
 
         if (_order == 1 && RequestContext.Get(Constants.Next) is null)
         {
-            await Replicate(nameof(Update));
+            await Replicate(nameof(Update), command);
             // await sessionReplicationData.WriteAsync(new SessionReplicationData
             // {
             //     SessionId = this.GetPrimaryKey(),
@@ -150,6 +142,8 @@ public sealed class SessionGrain(
             //     UpdateSessionCommand = command
             // });
         }
+
+        return localSiloDetails.SiloAddress;
     }
     
     public async Task<SessionData?> Get(GetSessionDataQuery query)
@@ -211,19 +205,19 @@ public sealed class SessionGrain(
 
         _state = SessionState.Empty();
 
+        await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), command.Reason));
+
         if (_order == 1)
         {
             var replica = clusterClient.GetGrain<ISessionGrain>(this.GetPrimaryKey(), (_order + 1).ToString());
             RequestContext.Set(Constants.SessionGrainOrder, _order + 1);
             return await replica.Invalidate(command);
         }
-        
-        await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), command.Reason));
 
         return true;
     }
     
-    private async Task Replicate(string reason)
+    private async Task Replicate(string reason, UpdateSessionCommand? command = null)
     {
         _replicationTimer?.Dispose();
         _replicationTimer = null;
@@ -234,7 +228,7 @@ public sealed class SessionGrain(
             "{SessionId} is replicating to {ReplicaOrder}. Reason: {Reason}",
             this.GetPrimaryKeyString(), replicaOrder, reason);
 
-        var command = new UpdateSessionCommand
+        command ??= new UpdateSessionCommand
         {
             Sections = _state.Data
                 .Select(x => new CreateSectionData
@@ -253,8 +247,8 @@ public sealed class SessionGrain(
             RequestContext.Set(Constants.SessionGrainOrder, replicaOrder);
             RequestContext.Set(Constants.Next, localSiloDetails.SiloAddress);
             
-            await replica.Update(command);
-            _next = await GrainFactory.GetGrain<IManagementGrain>(0).GetActivationAddress(replica);
+            _next = await replica.Update(command);
+            // _next = await GrainFactory.GetGrain<IManagementGrain>(0).GetActivationAddress(replica);
             _replicationTimer?.Dispose();
             _replicationTimer = null;
         }
@@ -290,7 +284,7 @@ public sealed class SessionGrain(
                 else
                 {
                     sectionData.Data = section.Value;
-                    sectionData.Version = section.Version;
+                    sectionData.Version++;
                 }
             }
             else

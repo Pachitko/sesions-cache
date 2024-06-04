@@ -14,7 +14,7 @@ internal sealed class GrainStateUpdaterBackgroundService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await foreach (var sessionStateBatch in sessionGrainStateReader
-                           .ReadAllBatches(batchSize: 1000, timeout: TimeSpan.FromMilliseconds(1000))
+                           .ReadAllBatches(batchSize: 5_000, timeout: TimeSpan.FromMilliseconds(1000))
                            .WithCancellation(stoppingToken))
         {
             try

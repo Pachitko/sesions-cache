@@ -8,8 +8,6 @@ public sealed record UpdateSessionCommand
     [Id(1)] public long? ExpirationUnixSeconds { get; init; }
     
     [Id(2)] public string? ServiceId { get; set; }
-    
-    public bool IsEmpty() => Sections.Length == 0 && !ExpirationUnixSeconds.HasValue;
 }
 
 [GenerateSerializer]

@@ -5,7 +5,6 @@ using Dapper;
 using Infrastructure.Options;
 using Microsoft.Extensions.Options;
 using Npgsql;
-using IsolationLevel = System.Data.IsolationLevel;
 
 namespace Infrastructure.Repositories;
 
@@ -43,7 +42,6 @@ internal sealed class SessionDataRepository(
     {
         await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         
         if (Transaction.Current is not null &&
             Transaction.Current.TransactionInformation.Status is TransactionStatus.Aborted)
@@ -65,7 +63,6 @@ internal sealed class SessionDataRepository(
     {
         await using var connection = new NpgsqlConnection(databaseOptions.Value.ConnectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         
         if (Transaction.Current is not null &&
             Transaction.Current.TransactionInformation.Status is TransactionStatus.Aborted)

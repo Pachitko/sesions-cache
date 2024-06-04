@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Tasks.Dataflow;
 using Client.Contracts.Requests;
 using Client.Middlewares;
@@ -11,6 +12,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Runtime;
 using Orleans.Runtime.Messaging;
+using Orleans.Serialization;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
@@ -57,6 +59,51 @@ var sessionsGroup = app.MapGroup("/sessions/");
 #region stress
 var sessionIds = new List<Guid>();
 
+// sessionsGroup.MapPatch("stress/{count}/{size}", async (
+//     [FromRoute] int count,
+//     [FromRoute] int size,
+//     [FromServices] IMemoryCache memoryCache,
+//     [FromServices] ILogger<Program> logger,
+//     [FromServices] IClusterClient client) =>
+// {
+//     var sw = new Stopwatch();
+//     sw.Start();
+//     
+//     var redis = ConnectionMultiplexer.Connect("localhost");
+//     var db = redis.GetDatabase();
+//     
+//     var updater = new TransformBlock<Guid, bool>(
+//         async sessionId =>
+//         {
+//             await db.HashSetAsync(sessionId.ToString(), new HashEntry[]
+//             {
+//                 new("section_name", new string('|', size))
+//             });
+//
+//             return true;
+//         },
+//         new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 1000 }
+//     );
+//
+//     var buffer = new BufferBlock<bool>();
+//     updater.LinkTo(buffer);
+//
+//     foreach (var sessionId in Enumerable.Range(0, count).Select(_ => Guid.NewGuid()))
+//     {
+//         sessionIds.Add(sessionId);
+//         updater.Post(sessionId);
+//         //or await downloader.SendAsync(url);
+//     }
+//
+//     updater.Complete();
+//     await updater.Completion;
+//     
+//     sw.Stop();
+//     Console.WriteLine($"Создано {count} сессий за {sw.Elapsed}. {count / sw.Elapsed.TotalSeconds} запросов/сек.");
+//
+//     return Results.Ok();
+// });
+
 sessionsGroup.MapPatch("stress/{count}/{size}", async (
     [FromRoute] int count,
     [FromRoute] int size,
@@ -64,6 +111,9 @@ sessionsGroup.MapPatch("stress/{count}/{size}", async (
     [FromServices] ILogger<Program> logger,
     [FromServices] IClusterClient client) =>
 {
+    var sw = new Stopwatch();
+    sw.Start();
+    
     var updater = new TransformBlock<Guid, bool>(
         sessionId =>
             RetryWithOrder(client, memoryCache, logger, sessionId, async sessionGrain =>
@@ -79,12 +129,12 @@ sessionsGroup.MapPatch("stress/{count}/{size}", async (
                             Version = 1
                         }
                     },
-                    ExpirationUnixSeconds = DateTimeOffset.UtcNow.Add(TimeSpan.FromMinutes(1)).ToUnixTimeSeconds()
+                    ExpirationUnixSeconds = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(300)).ToUnixTimeSeconds()
                 });
 
                 return true;
             }),
-        new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 1000 }
+        new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 100 }
     );
 
     var buffer = new BufferBlock<bool>();
@@ -100,6 +150,9 @@ sessionsGroup.MapPatch("stress/{count}/{size}", async (
     updater.Complete();
     await updater.Completion;
     
+    sw.Stop();
+    Console.WriteLine($"Создано {count} сессий за {sw.Elapsed}. {count / sw.Elapsed.TotalSeconds} запросов/сек.");
+
     return Results.Ok();
 });
 
@@ -109,6 +162,9 @@ sessionsGroup.MapGet("stress/{count}", async (
     [FromServices] ILogger<Program> logger,
     [FromServices] IClusterClient client) =>
 {
+    var sw = new Stopwatch();
+    sw.Start();
+    
     var updater = new TransformBlock<Guid, SessionData?>(
         sessionId =>
             RetryWithOrder(client, memoryCache, logger, sessionId, async sessionGrain =>
@@ -122,7 +178,7 @@ sessionsGroup.MapGet("stress/{count}", async (
                 });
                 return result;
             }),
-        new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 1000 }
+        new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 100 }
     );
 
     var buffer = new BufferBlock<SessionData?>();
@@ -138,6 +194,9 @@ sessionsGroup.MapGet("stress/{count}", async (
     updater.Complete();
     await updater.Completion;
     
+    sw.Stop();
+    
+    Console.WriteLine($"Получено {count} сессий за {sw.Elapsed}. {count / sw.Elapsed.TotalSeconds} запросов/сек.");
     return Results.Ok();
 });
 #endregion

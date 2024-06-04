@@ -32,7 +32,7 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddChannel<SessionDeletion>();
 builder.Services.AddChannel<SessionState>();
 
-builder.Services.AddScoped<IPermissionService, PermissionService>();
+builder.Services.AddSingleton<IPermissionService, PermissionService>();
 
 builder.Services.AddHostedService<GrainStateUpdaterBackgroundService>();
 builder.Services.AddHostedService<SessionDeleterBackgroundService>();
