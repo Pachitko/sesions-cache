@@ -206,7 +206,10 @@ sessionsGroup.MapDelete("{sessionId}", async (
 {
     var ok = await RetryWithOrder(client, memoryCache, logger, sessionId, async sessionGrain =>
     {
-        await sessionGrain.Invalidate(reason);
+        await sessionGrain.Invalidate(new InvalidateCommand
+        {
+            Reason = reason
+        });
         return true;
     });
     

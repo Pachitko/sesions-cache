@@ -35,7 +35,8 @@ public sealed class SessionDeleterBackgroundService(
                         sessionIdsBatch.Select(x => new
                         {
                             x.SessionId,
-                            x.Reason
+                            x.Reason,
+                            DateTimeOffset.UtcNow
                         }), 
                         stoppingToken);
                 }

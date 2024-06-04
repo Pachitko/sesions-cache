@@ -16,4 +16,10 @@ public static class Constants
     
     // 1, 2...
     public const string SessionGrainOrder = "sgo";
+
+    // permissions
+    public const char UpdateSectionActionCode = 'u';
+    public const char CreateSectionActionCode = 'c';
+    public const char ReadSectionActionCode = 'r';
+    public const char InvalidateSession = 'i';
 }

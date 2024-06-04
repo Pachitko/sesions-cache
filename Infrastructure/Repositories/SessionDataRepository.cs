@@ -31,7 +31,12 @@ internal sealed class SessionDataRepository(
                 on conflict do nothing
             """;
                 
-        await connection.ExecuteAsync(sql, sessionIds);
+        await connection.ExecuteAsync(
+            sql,
+            sessionIds.Select(sessionId => new
+            {
+                SessionId = sessionId
+            }));
     }
 
     public async Task<bool> Exists(Guid sessionId, CancellationToken cancellationToken)

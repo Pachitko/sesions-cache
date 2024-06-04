@@ -1,9 +1,11 @@
 using Core;
 using Core.Models;
+using Core.Services;
 using Grains.GrainExtensions;
 using Grains.States;
 using Infrastructure;
 using Infrastructure.Options;
+using Infrastructure.Services;
 using Orleans.Configuration;
 using Orleans.Runtime;
 using Server.BackgroundServices;
@@ -29,6 +31,8 @@ builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddChannel<SessionDeletion>();
 builder.Services.AddChannel<SessionState>();
+
+builder.Services.AddScoped<IPermissionService, PermissionService>();
 
 builder.Services.AddHostedService<GrainStateUpdaterBackgroundService>();
 builder.Services.AddHostedService<SessionDeleterBackgroundService>();

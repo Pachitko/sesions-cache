@@ -2,6 +2,7 @@
 using Core;
 using Core.Interfaces;
 using Core.Models;
+using Core.Services;
 using Grains.Exception;
 using Grains.Interfaces;
 using Grains.Messages;
@@ -14,6 +15,7 @@ namespace Server.Grains;
 
 [SessionPlacementStrategy]
 public sealed class SessionGrain(
+        IPermissionService permissionService,
         ISessionDataRepository sessionDataRepository,
         ILogger<SessionGrain> logger,
         ChannelWriter<SessionState> sessionGrainStateWriter,
@@ -90,6 +92,8 @@ public sealed class SessionGrain(
         
         if (_state.IsEmpty())
         {
+            permissionService.CheckAccess(command.ServiceId, command.Sections.Select(x => (Section: x.Key, action: 'c')));
+            
             if (!command.ExpirationUnixSeconds.HasValue)
             {
                 throw new ArgumentNullException(nameof(command.ExpirationUnixSeconds));
@@ -118,7 +122,7 @@ public sealed class SessionGrain(
                 _state.Version++;
             }
 
-            var concurrencyUpdateSections = UpdateSections(command.Sections).ToArray();
+            var concurrencyUpdateSections = UpdateSections(command.ServiceId, command.Sections).ToArray();
             
             if (concurrencyUpdateSections.Length != 0)
             {
@@ -181,6 +185,8 @@ public sealed class SessionGrain(
 
         CheckExpiration();
 
+        permissionService.CheckAccess(query.ServiceId, Constants.ReadSectionActionCode, query.Sections);
+        
         if (_next is null || siloStatusOracle.IsDeadSilo(_next) || _next.Equals(localSiloDetails.SiloAddress))
         {
             await Replicate(nameof(Get));
@@ -189,8 +195,10 @@ public sealed class SessionGrain(
         return SessionData.FromSessionState(_state, query.Sections);
     }
 
-    public async ValueTask<bool> Invalidate(string reason)
+    public async ValueTask<bool> Invalidate(InvalidateCommand command)
     {
+        permissionService.CheckAccess(command.ServiceId, Constants.InvalidateSession);
+
         logger.LogWarning("Invalidate {Key}", this.GetPrimaryKeyString());
 
         DeactivateOnIdle();
@@ -207,10 +215,10 @@ public sealed class SessionGrain(
         {
             var replica = clusterClient.GetGrain<ISessionGrain>(this.GetPrimaryKey(), (_order + 1).ToString());
             RequestContext.Set(Constants.SessionGrainOrder, _order + 1);
-            return await replica.Invalidate(reason);
+            return await replica.Invalidate(command);
         }
         
-        await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), reason));
+        await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), command.Reason));
 
         return true;
     }
@@ -267,12 +275,14 @@ public sealed class SessionGrain(
         }
     }
     
-    private IEnumerable<string> UpdateSections(IEnumerable<CreateSectionData> sections)
+    private IEnumerable<string> UpdateSections(string? serviceId, IEnumerable<CreateSectionData> sections)
     {
         foreach (var section in sections)
         {
             if (_state.Data.TryGetValue(section.Key, out var sectionData))
             {
+                permissionService.CheckAccess(serviceId, section.Key, Constants.UpdateSectionActionCode);
+
                 if (section.Version != sectionData.Version && _options.EnableConcurrencyCheckForSections)
                 {
                     yield return section.Key;
@@ -285,6 +295,8 @@ public sealed class SessionGrain(
             }
             else
             {
+                permissionService.CheckAccess(serviceId, section.Key, Constants.CreateSectionActionCode);
+                
                 _state.Data[section.Key] = new SectionData
                 {
                     Data = section.Value,
