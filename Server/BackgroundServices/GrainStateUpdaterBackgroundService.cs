@@ -17,6 +17,7 @@ internal sealed class GrainStateUpdaterBackgroundService(
                            .ReadAllBatches(batchSize: 5_000, timeout: TimeSpan.FromMilliseconds(1000))
                            .WithCancellation(stoppingToken))
         {
+            return;
             try
             {
                 await using var scope = serviceScopeFactory.CreateAsyncScope();

@@ -7,6 +7,9 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="Grpc.AspNetCore" Version="2.63.0" />
+      <PackageReference Include="Grpc.AspNetCore.Server.Reflection" Version="2.63.0" />
+      <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.6" />
       <PackageReference Include="Microsoft.Orleans.Client" Version="8.1.0" />
       <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" Version="8.0.0" />
       <PackageReference Include="Microsoft.Orleans.Runtime" Version="8.1.0" />
@@ -17,6 +20,10 @@
     <ItemGroup>
       <ProjectReference Include="..\Core\Core.csproj" />
       <ProjectReference Include="..\Grains\Grains.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Protobuf Include="Protos\session_service.proto" />
     </ItemGroup>
 
 </Project>

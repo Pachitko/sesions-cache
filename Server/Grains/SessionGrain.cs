@@ -1,33 +1,19 @@
-﻿using System.Threading.Channels;
-using Core;
-using Core.Interfaces;
+﻿using Core;
 using Core.Models;
-using Core.Services;
 using Grains.Exception;
+using Grains.GrainExtensions;
 using Grains.Interfaces;
 using Grains.Messages;
 using Grains.States;
-using Microsoft.Extensions.Options;
 using Orleans.Runtime;
 using Server.Options;
 
 namespace Server.Grains;
 
 [SessionPlacementStrategy]
-public sealed class SessionGrain(
-        IPermissionService permissionService,
-        ISessionDataRepository sessionDataRepository,
-        ILogger<SessionGrain> logger,
-        ChannelWriter<SessionState> sessionGrainStateWriter,
-        ChannelWriter<SessionDeletion> sessionDeletionWriter,
-        ILocalSiloDetails localSiloDetails,
-        IClusterClient clusterClient,
-        ILocalSessionCache localSessionCache,
-        ISiloStatusOracle siloStatusOracle,
-        IOptions<ServerOptions> options)
-        : Grain, ISessionGrain
+public sealed class SessionGrain(GrainSingletonService services) : Grain, ISessionGrain
 {
-    private readonly ServerOptions _options = options.Value;
+    private readonly ServerOptions _options = services.Options.Value;
     
     private SiloAddress? _next;
     
@@ -39,27 +25,29 @@ public sealed class SessionGrain(
 
     public override Task OnActivateAsync(CancellationToken cancellationToken)
     {
-        _next = (SiloAddress?)RequestContext.Get(Constants.Next);
+        SetNext((SiloAddress?)RequestContext.Get(Constants.Next));
         _order = (int)RequestContext.Get(Constants.SessionGrainOrder);
-
-        localSessionCache.Add(this.GetPrimaryKey(), TimeSpan.FromHours(1));
         
-        logger.LogWarning("Activating: {Id} {SiloAddress}", 
-            this.GetPrimaryKeyString(), localSiloDetails.SiloAddress);
+        services.LocalSessionCache.Add(this.GetPrimaryKey(), TimeSpan.FromHours(1));
+        
+        if (services.Logger.IsEnabled(LogLevel.Warning))
+            services.Logger.LogWarning("Activating: {Id} {SiloAddress}", 
+                this.GetPrimaryKeyString(), services.LocalSiloDetails.SiloAddress);
 
         return Task.CompletedTask;
     }
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
-        logger.LogWarning("Deactivating: {Id} {SiloAddress}",
-            this.GetPrimaryKeyString(), localSiloDetails.SiloAddress);
+        if (services.Logger.IsEnabled(LogLevel.Warning)) 
+            services.Logger.LogWarning("Deactivating: {Id} {SiloAddress}",
+            this.GetPrimaryKeyString(), services.LocalSiloDetails.SiloAddress);
         
-        localSessionCache.Remove(this.GetPrimaryKey());
+        services.LocalSessionCache.Remove(this.GetPrimaryKey());
 
         if (IsExpired())
         {
-            await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), "expired"), cancellationToken);
+            await services.SessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), "expired"), cancellationToken);
         }
         else
         {
@@ -67,10 +55,11 @@ public sealed class SessionGrain(
         }
     }
 
-    public async Task<SiloAddress> Update(UpdateSessionCommand command)
+    public async Task Update(UpdateSessionCommand command)
     {
-        logger.LogWarning("{SessionId} {@CommandSections}", 
-            this.GetPrimaryKeyString(), command.Sections.Select(x => x.Key));
+        if (services.Logger.IsEnabled(LogLevel.Warning)) 
+            services.Logger.LogWarning("{SessionId} {@CommandSections}", 
+                this.GetPrimaryKeyString(), command.Sections.Select(x => x.Key));
         
         var primaryKey = this.GetPrimaryKey();
         
@@ -84,7 +73,12 @@ public sealed class SessionGrain(
         
         if (_state.IsEmpty())
         {
-            permissionService.CheckAccess(command.ServiceId, command.Sections.Select(x => (Section: x.Key, action: 'c')));
+            if (_order == 1)
+            {
+                await services.SessionGrainStateWriter.WriteAsync(_state);
+            }
+
+            services.PermissionService.CheckAccess(command.ServiceId, command.Sections.Select(x => (Section: x.Key, action: 'c')));
             
             if (!command.ExpirationUnixSeconds.HasValue)
             {
@@ -97,13 +91,13 @@ public sealed class SessionGrain(
                 ExpirationUnixSeconds = command.ExpirationUnixSeconds.Value,
                 Version = 1,
                 Data = command.Sections
-                    .ToDictionary(
-                        x => x.Key, 
-                        x => new SectionData 
-                        {
-                            Data = x.Value,
-                            Version = x.Version,
-                        })
+                    .Select(x => new SectionData 
+                    {
+                        Name = x.Key,
+                        Version = 1,
+                        Data = x.Value
+                    })
+                    .ToList()
             };
         }
         else
@@ -126,12 +120,7 @@ public sealed class SessionGrain(
         }
 
         CheckExpiration();
-
-        if (_order == 1)
-        {
-            await sessionGrainStateWriter.WriteAsync(_state);
-        }
-
+        
         if (_order == 1 && RequestContext.Get(Constants.Next) is null)
         {
             await Replicate(nameof(Update), command);
@@ -142,32 +131,31 @@ public sealed class SessionGrain(
             //     UpdateSessionCommand = command
             // });
         }
-
-        return localSiloDetails.SiloAddress;
     }
     
     public async Task<SessionData?> Get(GetSessionDataQuery query)
     {
-        logger.LogWarning("Get {Key}", this.GetPrimaryKeyString());
+        if (services.Logger.IsEnabled(LogLevel.Warning))
+            services.Logger.LogWarning("Get {Key}", this.GetPrimaryKeyString());
 
         if (_state.IsEmpty())
         {
-            logger.LogWarning("Empty state on get {Key}", this.GetPrimaryKeyString());
+            if (services.Logger.IsEnabled(LogLevel.Warning))
+                services.Logger.LogWarning("Empty state on get {Key}", this.GetPrimaryKeyString());
             // if (!await sessionDataRepository.Exists(this.GetPrimaryKey(), CancellationToken.None))
             // {
             //     return null;
             // }
             
-            if (_order > 1)
+            if (_order > 1 || !ShouldReplicate())
                 return null;
             
             var replica = GrainFactory.GetGrain<ISessionGrain>(this.GetPrimaryKey(), (_order + 1).ToString());
-            // var replicaAddress = await GrainFactory.GetGrain<IManagementGrain>(0).GetActivationAddress(replica);
             
             RequestContext.Set(Constants.SessionGrainOrder, _order + 1);
             var replicaData = await replica.Get(query);
 
-            _next = await GrainFactory.GetGrain<IManagementGrain>(0).GetActivationAddress(replica);
+            _next = await replica.AsReference<ISessionGrainExtension>().GetSiloAddress();
 
             if (replicaData is not null)
             {
@@ -179,9 +167,9 @@ public sealed class SessionGrain(
 
         CheckExpiration();
 
-        permissionService.CheckAccess(query.ServiceId, Constants.ReadSectionActionCode, query.Sections);
+        services.PermissionService.CheckAccess(query.ServiceId, Constants.ReadSectionActionCode, query.Sections);
         
-        if (_next is null || siloStatusOracle.IsDeadSilo(_next) || _next.Equals(localSiloDetails.SiloAddress))
+        if (_next is null || services.SiloStatusOracle.IsDeadSilo(_next))
         {
             await Replicate(nameof(Get));
         }
@@ -191,25 +179,26 @@ public sealed class SessionGrain(
 
     public async ValueTask<bool> Invalidate(InvalidateCommand command)
     {
-        permissionService.CheckAccess(command.ServiceId, Constants.InvalidateSession);
+        services.PermissionService.CheckAccess(command.ServiceId, Constants.InvalidateSession);
 
-        logger.LogWarning("Invalidate {Key}", this.GetPrimaryKeyString());
+        if (services.Logger.IsEnabled(LogLevel.Warning))
+            services.Logger.LogWarning("Invalidate {Key}", this.GetPrimaryKeyString());
 
         DeactivateOnIdle();
-        localSessionCache.Remove(this.GetPrimaryKey());
+        services.LocalSessionCache.Remove(this.GetPrimaryKey());
         
-        if (_state.IsEmpty() && !await sessionDataRepository.Exists(this.GetPrimaryKey(), CancellationToken.None))
+        if (_state.IsEmpty() && !await services.SessionDataRepository.Exists(this.GetPrimaryKey(), CancellationToken.None))
         {
             return true;
         }
 
         _state = SessionState.Empty();
 
-        await sessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), command.Reason));
+        await services.SessionDeletionWriter.WriteAsync(new SessionDeletion(this.GetPrimaryKey(), command.Reason));
 
-        if (_order == 1)
+        if (_order == 1 && ShouldReplicate())
         {
-            var replica = clusterClient.GetGrain<ISessionGrain>(this.GetPrimaryKey(), (_order + 1).ToString());
+            var replica = services.ClusterClient.GetGrain<ISessionGrain>(this.GetPrimaryKey(), (_order + 1).ToString());
             RequestContext.Set(Constants.SessionGrainOrder, _order + 1);
             return await replica.Invalidate(command);
         }
@@ -217,25 +206,37 @@ public sealed class SessionGrain(
         return true;
     }
     
-    private async Task Replicate(string reason, UpdateSessionCommand? command = null)
+    private async Task Replicate(string reason, UpdateSessionCommand? command = null, bool fromTimer = false)
     {
+        if (!ShouldReplicate())
+        {
+            return;
+        }
+        
+        if (!fromTimer && _options.ReplicationType == ReplicationType.Async)
+        {
+            StartReplicationTimer();
+            return;
+        }
+        
         _replicationTimer?.Dispose();
         _replicationTimer = null;
         
         var replicaOrder = _order == 1 ? 2 : 1;
         
-        logger.LogWarning(
-            "{SessionId} is replicating to {ReplicaOrder}. Reason: {Reason}",
-            this.GetPrimaryKeyString(), replicaOrder, reason);
+        if (services.Logger.IsEnabled(LogLevel.Warning))
+            services.Logger.LogWarning(
+                "{SessionId} is replicating to {ReplicaOrder}. Reason: {Reason}",
+                this.GetPrimaryKeyString(), replicaOrder, reason);
 
         command ??= new UpdateSessionCommand
         {
             Sections = _state.Data
                 .Select(x => new CreateSectionData
                 {
-                    Key = x.Key,
-                    Value = x.Value.Data,
-                    Version = x.Value.Version
+                    Key = x.Name,
+                    Value = x.Data,
+                    Version = x.Version
                 })
                 .ToArray(),
             ExpirationUnixSeconds = _state.ExpirationUnixSeconds
@@ -243,59 +244,80 @@ public sealed class SessionGrain(
         
         try
         {
-            var replica = clusterClient.GetGrain<ISessionGrain>(this.GetPrimaryKey(), replicaOrder.ToString());
+            var replica = services.ClusterClient.GetGrain<ISessionGrain>(this.GetPrimaryKey(), replicaOrder.ToString());
             RequestContext.Set(Constants.SessionGrainOrder, replicaOrder);
-            RequestContext.Set(Constants.Next, localSiloDetails.SiloAddress);
+            RequestContext.Set(Constants.Next, services.LocalSiloDetails.SiloAddress);
+
+            await replica.Update(command);
             
-            _next = await replica.Update(command);
-            // _next = await GrainFactory.GetGrain<IManagementGrain>(0).GetActivationAddress(replica);
+            var replicaAddress = await replica.AsReference<ISessionGrainExtension>().GetSiloAddress();
+            
+            SetNext(replicaAddress);
+            
             _replicationTimer?.Dispose();
             _replicationTimer = null;
         }
         catch (Exception e)
         {
-            logger.LogError(e, "Start replication retrying for session {SessionId} {Order}", this.GetPrimaryKey(), replicaOrder);
+            if (services.Logger.IsEnabled(LogLevel.Warning))
+                services.Logger.LogError(e, "Start replication retrying for session {SessionId} {Order}", this.GetPrimaryKey(), replicaOrder);
 
             if (_replicationTimer is not null)
             {
                 return;
             }
             
-            _replicationTimer = RegisterTimer(
-                asyncCallback: _ => Replicate("retry"),
-                state: null!,
-                dueTime: _options.ReplicationRetryDelay,
-                period: _options.ReplicationRetryDelay);
+            if (_options is { ReplicationType: ReplicationType.Sync, EnsureSynchronized: true })
+            {
+                throw;
+            }
+            
+            StartReplicationTimer();
         }
+    }
+
+    private void StartReplicationTimer()
+    {
+        _replicationTimer = RegisterTimer(
+            asyncCallback: _ => Replicate("retry", fromTimer: true),
+            state: null!,
+            dueTime: _options.ReplicationType == ReplicationType.Async
+                ? TimeSpan.FromMilliseconds(500)
+                : _options.ReplicationRetryDelay,
+            period: _options.ReplicationRetryDelay);
     }
     
     private IEnumerable<string> UpdateSections(string? serviceId, IEnumerable<CreateSectionData> sections)
     {
         foreach (var section in sections)
         {
-            if (_state.Data.TryGetValue(section.Key, out var sectionData))
+            var existingSectionData = _state.Data.FirstOrDefault(x => x.Name == section.Key);
+            
+            if (existingSectionData is not null)
             {
-                permissionService.CheckAccess(serviceId, section.Key, Constants.UpdateSectionActionCode);
+                services.PermissionService.CheckAccess(serviceId, section.Key, Constants.UpdateSectionActionCode);
 
-                if (section.Version != sectionData.Version && _options.EnableConcurrencyCheckForSections)
+                if (section.Version != existingSectionData.Version && _options.EnableConcurrencyCheckForSections)
                 {
                     yield return section.Key;
                 }
                 else
                 {
-                    sectionData.Data = section.Value;
-                    sectionData.Version++;
+                    existingSectionData.Data = section.Value;
+                    existingSectionData.Version++;
                 }
             }
             else
             {
-                permissionService.CheckAccess(serviceId, section.Key, Constants.CreateSectionActionCode);
+                services.PermissionService.CheckAccess(serviceId, section.Key, Constants.CreateSectionActionCode);
                 
-                _state.Data[section.Key] = new SectionData
-                {
-                    Data = section.Value,
-                    Version = 1
-                };
+                _state.Data.Add(new SectionData
+                    {
+                        Name = section.Key,
+                        Data = section.Value,
+                        Version = 1,
+                    }
+                );
             }
         }
     }
@@ -311,5 +333,17 @@ public sealed class SessionGrain(
     private bool IsExpired()
     {
         return _state.ExpirationUnixSeconds <= DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    }
+
+    private void SetNext(SiloAddress? next)
+    {
+        _next = next is null || next.Equals(services.SiloStatusOracle.SiloAddress) 
+            ? null 
+            : next;
+    }
+
+    private bool ShouldReplicate()
+    {
+        return _options.ReplicationFactor > 0;
     }
 }

@@ -11,8 +11,8 @@ public sealed class SessionData
     [Id(0)]
     public required long ExpirationUnixSeconds { get; set; }
 
-    [Id(1)]
-    public IDictionary<SectionId, SectionData> Data { get; init; } = new Dictionary<SectionId, SectionData>();
+    [Id(1)] 
+    public List<SectionData> Data { get; set; } = new();
 
     [Id(2)]
     public long Version { get; set; }
@@ -27,18 +27,15 @@ public sealed class SessionData
         };
     }
 
-    private static Dictionary<SectionId, SectionData> GetSections(SessionState sessionState, IEnumerable<string> sections)
+    private static List<SectionData> GetSections(SessionState sessionState, IEnumerable<string> sections)
     {
-        var result = new Dictionary<SectionId, SectionData>();
+        var result = new List<SectionData>();
+        result
+            .AddRange(sections
+                .Select(section => sessionState.Data.FirstOrDefault(x => x.Name == section))
+                .Where(sectionData => sectionData is not null)!
+                );
 
-        foreach (var section in sections)
-        {
-            if (sessionState.Data.TryGetValue(section, out var value))
-            {
-                result.Add(section, value);
-            }
-        }
-        
         return result;
     }
 }

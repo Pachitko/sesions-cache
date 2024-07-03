@@ -7,9 +7,9 @@ using Server.Options;
 
 namespace Server.BackgroundServices;
 
-public sealed class SessionDeleterBackgroundService(
+public sealed class SessionUpdaterBackgroundService(
         IServiceScopeFactory serviceScopeFactory,
-        ILogger<SessionDeleterBackgroundService> logger,
+        ILogger<SessionUpdaterBackgroundService> logger,
         ChannelReader<SessionDeletion> sessionDeletionReader,
         IHttpClientFactory httpClientFactory,
         IOptions<ServerOptions> serverOptions)
@@ -27,11 +27,11 @@ public sealed class SessionDeleterBackgroundService(
                 var sessionDataRepository = scope.ServiceProvider.GetRequiredService<ISessionDataRepository>();
                 await sessionDataRepository.Delete(sessionIdsBatch, stoppingToken);
                 
-                if (!string.IsNullOrWhiteSpace(serverOptions.Value.InvalidationCallbackUrl))
+                if (!string.IsNullOrWhiteSpace(serverOptions.Value.NotificationUrl))
                 {
                     var client = httpClientFactory.CreateClient();
                     await client.PostAsJsonAsync(
-                        serverOptions.Value.InvalidationCallbackUrl,
+                        serverOptions.Value.NotificationUrl,
                         sessionIdsBatch.Select(x => new
                         {
                             x.SessionId,
@@ -43,7 +43,8 @@ public sealed class SessionDeleterBackgroundService(
             }
             catch (Exception e)
             {
-                logger.LogError(e, "Delete sessions error");
+                logger.LogError(e, "Delete sessions error {SessionIds}", 
+                    string.Join('|', sessionIdsBatch.Select(x => x.SessionId)));
             }
         }
     }

@@ -56,3 +56,25 @@ Content-Type: application/json
 }
 ]
 }
+
+# Server Options
+
+```json
+{
+    "ServerOptions":
+    {
+        "ListenLocalPort": 33550,
+        "SiloPort": 33551,
+        "GatewayPort": 33552,
+      
+        "ReplicationFactor": 1,
+        "ReplicationRetryDelay": "00:00:15",
+        "EnableConcurrencyCheckForSections": false,
+        "EnsureSynchronized": false,
+        "InvalidationCallbackUrl": null,
+        "OpenPolicyUpdateDelay": "00:05:00",
+        "OpenPolicyAgentHost": "localhost:9999",
+        "ReplicationType": "Async"
+    }
+}
+```

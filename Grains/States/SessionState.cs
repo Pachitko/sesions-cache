@@ -17,7 +17,7 @@ public sealed class SessionState
     public required long ExpirationUnixSeconds { get; set; }
 
     [Id(2)]
-    public IDictionary<SectionId, SectionData> Data { get; init; } = new Dictionary<SectionId, SectionData>();
+    public List<SectionData> Data { get; set; } = new();
 
     [Id(3)]
     public long Version { get; set; } = 1;

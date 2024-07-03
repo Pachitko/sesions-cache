@@ -1,0 +1,69 @@
+syntax = "proto3";
+import "google/protobuf/wrappers.proto";
+
+package Generated.SessionService;
+
+service SessionService {
+    rpc Get(GetSessionRequest) returns (GetSessionResponse);
+    rpc Update(UpdateSessionRequest) returns (UpdateSessionResponse);
+    rpc Invalidate(InvalidateSessionRequest) returns (InvalidateSessionResponse);
+
+    rpc TestStressGet(TestStressGetRequest) returns (TestStressGetResponse);
+    rpc TestStressUpdate(TestStressUpdateRequest) returns (TestStressUpdateResponse);
+}
+
+message GetSessionRequest {
+    string service_id = 1;
+    string session_id = 2;
+    repeated string sections = 3;
+}
+
+message GetSessionResponse {
+    int64 expiration_unix_seconds = 1;
+    int64 version = 2;
+    repeated SectionResponse sections = 3;
+}
+
+message SectionResponse {
+    string key = 1;
+    int64 version = 2;
+    bytes data = 3;
+}
+
+message UpdateSessionRequest {
+    string service_id = 1;
+    string session_id = 2;
+    google.protobuf.Int32Value time_to_live_in_seconds = 3;
+    repeated SectionRequest sections = 4;
+}
+
+message SectionRequest {
+    string key = 1;
+    int64 version = 2;
+    bytes data = 3;
+}
+
+message UpdateSessionResponse { }
+
+message InvalidateSessionRequest {
+    string service_id = 1;
+    string session_id = 2;
+    string reason = 3;
+}
+
+message InvalidateSessionResponse { }
+
+message TestStressGetRequest{
+    int32 count = 1;
+    int32 tests = 2;
+}
+
+message TestStressGetResponse { }
+
+message TestStressUpdateRequest{
+    int32 count = 1;
+    int32 size = 2;
+    int32 tests = 3;
+}
+
+message TestStressUpdateResponse { }

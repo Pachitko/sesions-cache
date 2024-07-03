@@ -12,6 +12,6 @@ public sealed class ClientOptions
     public required string ConnectionString { get; set; }
 
     [Required]
-    [Range(1, 3)]
-    public required int ReplicationFactor { get; set; }
+    [Range(0, 2)]
+    public required ushort ReplicationFactor { get; set; }
 }

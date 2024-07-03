@@ -27,6 +27,8 @@ builder.Services
 
 builder.Services.AddHttpClient();
 
+builder.Services.AddSingleton<GrainSingletonService>();
+
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddChannel<SessionDeletion>();
@@ -35,7 +37,7 @@ builder.Services.AddChannel<SessionState>();
 builder.Services.AddSingleton<IPermissionService, PermissionService>();
 
 builder.Services.AddHostedService<GrainStateUpdaterBackgroundService>();
-builder.Services.AddHostedService<SessionDeleterBackgroundService>();
+builder.Services.AddHostedService<SessionUpdaterBackgroundService>();
 
 builder.WebHost.UseKestrelCore();
 builder.WebHost.ConfigureKestrel(serverConfig =>
@@ -64,7 +66,11 @@ builder.Services.AddPlacementDirector<SessionPlacementStrategy, SessionPlacement
 
 builder.Host.UseOrleans(static siloBuilder =>
 {
+
     var serverOptions = siloBuilder.Configuration.GetSection(nameof(ServerOptions)).Get<ServerOptions>()!;
+    
+    Console.WriteLine(serverOptions);
+    
     var databaseOptions = siloBuilder.Configuration.GetSection(nameof(DatabaseOptions)).Get<DatabaseOptions>()!;
 
     siloBuilder.UseDashboard(x => { });
@@ -86,7 +92,7 @@ builder.Host.UseOrleans(static siloBuilder =>
     siloBuilder.ConfigureServices(services =>
         services.AddSingleton<PlacementStrategy, HashBasedPlacement>());
     
-    siloBuilder.AddGrainExtension<IGrainDeactivateExtension, GrainDeactivateExtension>();
+    siloBuilder.AddGrainExtension<ISessionGrainExtension, SessionSessionGrainExtension>();
 });
 
 var app = builder.Build();
